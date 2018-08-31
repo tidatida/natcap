@@ -1201,7 +1201,9 @@ struct natcap_session *natcap_session_get(struct nf_conn *ct)
 
 int natcap_udp_to_tcp_pack(struct sk_buff *skb, struct natcap_session *ns, int m)
 {
-	int ret;
+	struct nf_conn *ct, *ct2;
+	enum ip_conntrack_info ctinfo;
+	int ret = NF_DROP;
 	struct iphdr *iph;
 	void *l4;
 
@@ -1251,9 +1253,22 @@ int natcap_udp_to_tcp_pack(struct sk_buff *skb, struct natcap_session *ns, int m
 
 	ns->current_seq = ntohl(TCPH(l4)->seq) + ntohs(iph->tot_len) - iph->ihl * 4 - sizeof(struct tcphdr);
 
+	ct = nf_ct_get(skb, &ctinfo);
 	skb_nfct_reset(skb);
-	if ((ret = nf_conntrack_in(&init_net, PF_INET, NF_INET_PRE_ROUTING, skb)) == NF_ACCEPT) {
-		ret = nf_conntrack_confirm(skb);
+	if (ct != NULL) {
+		if ((ret = nf_conntrack_in(&init_net, PF_INET, NF_INET_PRE_ROUTING, skb)) == NF_ACCEPT) {
+			ret = nf_conntrack_confirm(skb);
+			if (ret == NF_ACCEPT) {
+				ct2 = nf_ct_get(skb, &ctinfo);
+				if (ct2 != NULL) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
+					ct2->timeout.expires = ct->timeout.expires;
+#else
+					ct2->timeout = ct->timeout;
+#endif
+				}
+			}
+		}
 	}
 	if (ret != NF_ACCEPT) {
 		return -EINVAL;
